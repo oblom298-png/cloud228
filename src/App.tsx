@@ -1439,26 +1439,30 @@ export function App() {
       setServerUsers(serverUsrs);
       setTracks(prev=>{
         const localMap=new Map(prev.map((t:Track)=>[t.id,t]));
-        const merged=[...prev];
-        for(const t of serverTracks){
-          if(!localMap.has(t.id)){
-            merged.push({...t,audioUrl:audioUrlMapRef.current[t.id]});
-          } else {
-            // Update server-synced fields only (likes, plays, reposts, comments)
-            const local=localMap.get(t.id)!;
-            const idx=merged.findIndex(x=>x.id===t.id);
-            if(idx>=0) merged[idx]={
-              ...t,
-              audioUrl:local.audioUrl||audioUrlMapRef.current[t.id],
-              liked:local.liked,
-              reposted:local.reposted,
-              coverImage:local.coverImage||t.coverImage,
-            };
+        // Build merged list: server tracks as base (authoritative), keep local audio/cover
+        const merged:Track[]=[];
+        for(const st of serverTracks){
+          const local=localMap.get(st.id);
+          merged.push({
+            ...st,
+            audioUrl:   (local?.audioUrl)||(audioUrlMapRef.current[st.id])||undefined,
+            liked:      local?.liked??false,
+            reposted:   local?.reposted??false,
+            coverImage: st.coverImage||(local?.coverImage)||undefined,
+            waveform:   (local?.waveform)||(st.waveform)||genWaveform(st.id.charCodeAt(2)||42),
+            comments:   st.comments||[],
+          });
+        }
+        // Append local-only tracks not yet confirmed by server
+        for(const lt of prev){
+          if(!serverTracks.some(s=>s.id===lt.id)){
+            merged.unshift(lt);
           }
         }
         return merged;
       });
     } catch { setOnline(false); }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   },[]);
 
   useEffect(()=>{
@@ -1593,10 +1597,11 @@ export function App() {
     setUser(u=>u?{...u,tracksCount:u.tracksCount+1}:u);
     setCurrentTrack(withUser);
     setTimeout(()=>setIsPlaying(true),120);
-    // Send to server (metadata only, no blob)
-    const trackForServer={...withUser,audioUrl:undefined,coverImage:undefined};
+    // Send to server (metadata + coverImage, no audio blob)
+    // coverImage stored as dataURL (server limits to ~700KB)
+    const trackForServer={...withUser,audioUrl:undefined};
     if(WS_URL&&wsRef.current?.readyState===WebSocket.OPEN){
-      wsRef.current.send(JSON.stringify({type:'UPLOAD_TRACK',track:trackForServer}));
+      wsRef.current.send(JSON.stringify({type:'UPLOAD_TRACK',track:{...trackForServer,coverImage:undefined}}));
     } else {
       await apiFetch('/api/track',{method:'POST',body:JSON.stringify({track:trackForServer})});
     }

@@ -1,8 +1,8 @@
 // api/action.js — POST /api/action
 // Handles: like, repost, comment, play, follow, comment_like
-import { store, addEvent } from './_store.js';
+import { dbRead, dbWrite } from './_db.js';
 
-export default function handler(req, res) {
+export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -12,10 +12,14 @@ export default function handler(req, res) {
 
   const { type, trackId, userId, comment, commentId, targetId, followerId } = req.body || {};
 
+  const db = await dbRead();
+  if (!db.tracks) db.tracks = [];
+  if (!db.users)  db.users  = [];
+
   switch (type) {
 
     case 'LIKE': {
-      const track = store.tracks.find(t => t.id === trackId);
+      const track = db.tracks.find(t => t.id === trackId);
       if (!track) return res.status(404).json({ error: 'Track not found' });
       if (!track._likedBy) track._likedBy = [];
       const already = track._likedBy.includes(userId);
@@ -26,12 +30,13 @@ export default function handler(req, res) {
         track._likedBy.push(userId);
         track.likes = (track.likes || 0) + 1;
       }
-      addEvent('TRACK_UPDATED', { track: { ...track, _likedBy: undefined } });
-      return res.status(200).json({ ok: true, likes: track.likes });
+      db.ts = Date.now();
+      await dbWrite(db);
+      return res.status(200).json({ ok: true, likes: track.likes, liked: !already });
     }
 
     case 'REPOST': {
-      const track = store.tracks.find(t => t.id === trackId);
+      const track = db.tracks.find(t => t.id === trackId);
       if (!track) return res.status(404).json({ error: 'Track not found' });
       if (!track._repostedBy) track._repostedBy = [];
       const already = track._repostedBy.includes(userId);
@@ -42,23 +47,25 @@ export default function handler(req, res) {
         track._repostedBy.push(userId);
         track.reposts = (track.reposts || 0) + 1;
       }
-      addEvent('TRACK_UPDATED', { track: { ...track, _repostedBy: undefined } });
-      return res.status(200).json({ ok: true, reposts: track.reposts });
+      db.ts = Date.now();
+      await dbWrite(db);
+      return res.status(200).json({ ok: true, reposts: track.reposts, reposted: !already });
     }
 
     case 'COMMENT': {
-      const track = store.tracks.find(t => t.id === trackId);
+      const track = db.tracks.find(t => t.id === trackId);
       if (!track || !comment?.id) return res.status(400).json({ error: 'Bad request' });
       if (!track.comments) track.comments = [];
       if (!track.comments.some(c => c.id === comment.id)) {
-        track.comments.push(comment);
-        addEvent('TRACK_UPDATED', { track });
+        track.comments.push({ ...comment, _likedBy: [] });
+        db.ts = Date.now();
+        await dbWrite(db);
       }
-      return res.status(200).json({ ok: true });
+      return res.status(200).json({ ok: true, commentCount: track.comments.length });
     }
 
     case 'COMMENT_LIKE': {
-      const track = store.tracks.find(t => t.id === trackId);
+      const track = db.tracks.find(t => t.id === trackId);
       if (!track) return res.status(404).json({ error: 'Track not found' });
       const c = (track.comments || []).find(c => c.id === commentId);
       if (!c) return res.status(404).json({ error: 'Comment not found' });
@@ -71,21 +78,23 @@ export default function handler(req, res) {
         c._likedBy.push(userId);
         c.likes = (c.likes || 0) + 1;
       }
-      addEvent('TRACK_UPDATED', { track });
-      return res.status(200).json({ ok: true });
+      db.ts = Date.now();
+      await dbWrite(db);
+      return res.status(200).json({ ok: true, likes: c.likes });
     }
 
     case 'PLAY': {
-      const track = store.tracks.find(t => t.id === trackId);
+      const track = db.tracks.find(t => t.id === trackId);
       if (track) {
         track.plays = (track.plays || 0) + 1;
-        addEvent('TRACK_UPDATED', { track });
+        db.ts = Date.now();
+        await dbWrite(db);
       }
       return res.status(200).json({ ok: true });
     }
 
     case 'FOLLOW': {
-      const target = store.users.find(u => u.id === targetId);
+      const target = db.users.find(u => u.id === targetId);
       if (!target) return res.status(404).json({ error: 'User not found' });
       if (!target._followers) target._followers = [];
       const already = target._followers.includes(followerId);
@@ -96,7 +105,8 @@ export default function handler(req, res) {
         target._followers.push(followerId);
         target.followers = (target.followers || 0) + 1;
       }
-      addEvent('USER_UPDATED', { user: { ...target, _followers: undefined } });
+      db.ts = Date.now();
+      await dbWrite(db);
       return res.status(200).json({ ok: true, followers: target.followers });
     }
 

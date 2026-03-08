@@ -1,7 +1,7 @@
 // api/register.js — POST /api/register
-import { store, addEvent } from './_store.js';
+import { dbRead, dbWrite } from './_db.js';
 
-export default function handler(req, res) {
+export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -10,36 +10,46 @@ export default function handler(req, res) {
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method Not Allowed' }); return; }
 
   const { user } = req.body || {};
-
-  if (!user?.name || !user?.email) {
-    return res.status(400).json({ error: 'Имя и email обязательны' });
+  if (!user?.id || !user?.name || !user?.email) {
+    return res.status(400).json({ error: 'Неверные данные' });
   }
 
-  const nameLow  = user.name.trim().toLowerCase();
-  const emailLow = user.email.trim().toLowerCase();
+  const db = await dbRead();
+  if (!db.users) db.users = [];
+  if (!db.tracks) db.tracks = [];
 
-  if (store.users.some(u => u.name.trim().toLowerCase() === nameLow)) {
-    return res.status(409).json({ error: `Имя «${user.name.trim()}» уже занято` });
-  }
-  if (store.users.some(u => u.email.trim().toLowerCase() === emailLow)) {
-    return res.status(409).json({ error: 'Этот email уже зарегистрирован' });
+  // Check name uniqueness
+  const nameTaken = db.users.some(
+    u => u.name.trim().toLowerCase() === user.name.trim().toLowerCase()
+  );
+  if (nameTaken) {
+    return res.status(409).json({ error: `Имя «${user.name}» уже занято` });
   }
 
-  const pub = {
-    id:          user.id || ('u_' + Date.now() + '_' + Math.random().toString(36).slice(2)),
+  // Check email uniqueness
+  const emailTaken = db.users.some(
+    u => u.email.toLowerCase() === user.email.toLowerCase()
+  );
+  if (emailTaken) {
+    return res.status(409).json({ error: 'Email уже зарегистрирован' });
+  }
+
+  const newUser = {
+    id:          user.id,
     name:        user.name.trim(),
-    email:       emailLow,
+    email:       user.email.toLowerCase(),
     role:        user.role || 'listener',
     tracksCount: 0,
     followers:   0,
     verified:    true,
     joinedAt:    user.joinedAt || new Date().toLocaleDateString('ru-RU'),
-    bio:         user.bio || '',
+    _followers:  [],
   };
 
-  store.users.push(pub);
-  addEvent('USER_REGISTERED', { user: pub });
+  db.users.push(newUser);
+  db.ts = Date.now();
+  await dbWrite(db);
 
-  console.log(`[REG] ${pub.name} (${pub.role})`);
-  return res.status(200).json({ ok: true, user: pub });
+  console.log(`[REGISTER] ${newUser.name} (${newUser.role}) <${newUser.email}>`);
+  return res.status(200).json({ ok: true, user: newUser });
 }
